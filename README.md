@@ -13,13 +13,17 @@ or Adaptive Cruise Control.
 - If the truck is at least 5 km/h faster and the adjacent left lane appears
   clear, sends a short `lblinker` pulse through `GameOutput`.
 - After passing the original target vehicle, sends a short `rblinker` pulse to
-  request returning.
+  request returning once the right lane is clear 70 meters ahead and 35 meters
+  behind.
 - After completion or abort, waits 10 seconds before checking for another
   overtake.
 - Registers an ETS2LA overlay window with live status, target distance, speed
   delta, cooldown, and lane-clear checks.
 - Registers optional AR markers that draw the current candidate or active target
-  vehicle in the game overlay.
+  vehicle in the game overlay. During passing/returning it also draws the right
+  lane return-clearance zone.
+- Adjacent-lane safety checks scan the requested side only and include a
+  vehicle-size buffer.
 
 The actual lane-change execution remains owned by the existing Pathfinding,
 Lane Assist, and ACC plugins.

@@ -30,9 +30,10 @@ public sealed class OvertakeAssistantPlugin : Plugin, IPluginUi
     private const float AdjacentLaneTolerance = 2.4f;
     private const float AdjacentFrontClearance = 70f;
     private const float AdjacentRearClearance = 45f;
-    private const float ReturnFrontClearance = 38f;
+    private const float ReturnFrontClearance = 70f;
     private const float ReturnRearClearance = 35f;
     private const float PassedVehicleBehindDistance = 26f;
+    private const float VehicleLongitudinalSafetyBuffer = 2.0f;
     private const float IndicatorPulseSeconds = 0.35f;
     private const float LaneChangeSettleSeconds = 7.0f;
     private const float CooldownSeconds = 10f;
@@ -41,6 +42,7 @@ public sealed class OvertakeAssistantPlugin : Plugin, IPluginUi
     private const uint ArCandidateColor = 0x66CCFFFF;
     private const uint ArActiveColor = 0x77EE77FF;
     private const uint ArReturnColor = 0xFFCC66FF;
+    private const uint ArReturnZoneColor = 0xFFCC66CC;
 
     private readonly ControlChannelDefinition _indicatorChannel = new()
     {
@@ -451,6 +453,16 @@ public sealed class OvertakeAssistantPlugin : Plugin, IPluginUi
                 new ARCoordinate(vehicle.Position + Vector3.UnitY * 1.0f),
                 color,
                 2.0f);
+
+            if (_phase is OvertakePhase.Idle or OvertakePhase.RequestingLeft)
+            {
+                DrawLaneClearanceZones(ar, truckPosition, LaneSide.Left, AdjacentFrontClearance, AdjacentRearClearance, ArCandidateColor, "Overtake scan");
+            }
+
+            if (_phase is OvertakePhase.Passing or OvertakePhase.RequestingRight)
+            {
+                DrawLaneClearanceZones(ar, truckPosition, LaneSide.Right, ReturnFrontClearance, ReturnRearClearance, ArReturnZoneColor, "Return scan");
+            }
         }
     }
 
@@ -477,6 +489,43 @@ public sealed class OvertakeAssistantPlugin : Plugin, IPluginUi
         ar.Draw3DLine(topFrontRight, bottomFrontRight, color, 2.0f);
         ar.Draw3DLine(topRearRight, bottomRearRight, color, 2.0f);
         ar.Draw3DLine(topRearLeft, bottomRearLeft, color, 2.0f);
+    }
+
+    private void DrawLaneClearanceZones(ARRenderer ar, Vector3 truckPosition, LaneSide side, float frontClearance, float rearClearance, uint color, string label)
+    {
+        foreach (float lateral in GetLaneScanLaterals(side))
+        {
+            DrawLaneClearanceZone(ar, truckPosition, lateral, frontClearance, rearClearance, color);
+        }
+
+        DrawLaneClearanceLabel(ar, truckPosition, GetPrimaryLaneLateral(side), frontClearance, rearClearance, color, label);
+    }
+
+    private void DrawLaneClearanceZone(ARRenderer ar, Vector3 truckPosition, float lateral, float frontClearance, float rearClearance, uint color)
+    {
+        Vector3 forward = Vector3.Normalize(_estimatedForward);
+        Vector3 right = Vector3.Normalize(Vector3.Cross(Vector3.UnitY, forward));
+        Vector3 laneCenter = truckPosition + right * lateral + Vector3.UnitY * 0.12f;
+        float halfWidth = AdjacentLaneTolerance;
+
+        Vector3 frontCenter = laneCenter + forward * frontClearance;
+        Vector3 rearCenter = laneCenter - forward * rearClearance;
+
+        ARCoordinate frontLeft = frontCenter - right * halfWidth;
+        ARCoordinate frontRight = frontCenter + right * halfWidth;
+        ARCoordinate rearRight = rearCenter + right * halfWidth;
+        ARCoordinate rearLeft = rearCenter - right * halfWidth;
+
+        ar.Draw3DQuad(frontLeft, frontRight, rearRight, rearLeft, color, thickness: 2.0f);
+        ar.Draw3DLine(new ARCoordinate(laneCenter - forward * rearClearance), new ARCoordinate(laneCenter + forward * frontClearance), color, 2.0f);
+    }
+
+    private void DrawLaneClearanceLabel(ARRenderer ar, Vector3 truckPosition, float lateral, float frontClearance, float rearClearance, uint color, string label)
+    {
+        Vector3 forward = Vector3.Normalize(_estimatedForward);
+        Vector3 right = Vector3.Normalize(Vector3.Cross(Vector3.UnitY, forward));
+        Vector3 labelPosition = truckPosition + right * lateral + forward * Math.Min(frontClearance, 25f) + Vector3.UnitY * 2.2f;
+        ar.Draw3DText(new ARCoordinate(labelPosition), $"{label} +{frontClearance:0}m / -{rearClearance:0}m", color);
     }
 
     private bool CanAssistRun(out string reason)
@@ -706,27 +755,57 @@ public sealed class OvertakeAssistantPlugin : Plugin, IPluginUi
             return false;
         }
 
-        float targetLateral = side == LaneSide.Left ? -AdjacentLaneWidth : AdjacentLaneWidth;
         foreach (TrafficVehicle vehicle in _traffic.vehicles.Where(IsUsableVehicle))
         {
             VehicleProjection projection = ProjectVehicle(vehicle, truckPosition);
-            if (Math.Abs(projection.Lateral - targetLateral) > AdjacentLaneTolerance)
+            if (!IsInAnyScannedAdjacentLane(projection.Lateral, side))
             {
                 continue;
             }
 
-            if (projection.Longitudinal >= 0f && projection.Longitudinal < frontClearance)
+            float longitudinalBuffer = GetLongitudinalVehicleBuffer(vehicle);
+            if (projection.Longitudinal >= -longitudinalBuffer &&
+                projection.Longitudinal < frontClearance + longitudinalBuffer)
             {
                 return false;
             }
 
-            if (projection.Longitudinal < 0f && Math.Abs(projection.Longitudinal) < rearClearance)
+            if (projection.Longitudinal < 0f &&
+                Math.Abs(projection.Longitudinal) < rearClearance + longitudinalBuffer)
             {
                 return false;
             }
         }
 
         return true;
+    }
+
+    private static float[] GetLaneScanLaterals(LaneSide side)
+    {
+        return [GetPrimaryLaneLateral(side)];
+    }
+
+    private static float GetPrimaryLaneLateral(LaneSide side)
+    {
+        return side == LaneSide.Left ? AdjacentLaneWidth : -AdjacentLaneWidth;
+    }
+
+    private static bool IsInAnyScannedAdjacentLane(float lateral, LaneSide side)
+    {
+        foreach (float targetLateral in GetLaneScanLaterals(side))
+        {
+            if (Math.Abs(lateral - targetLateral) <= AdjacentLaneTolerance)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static float GetLongitudinalVehicleBuffer(TrafficVehicle vehicle)
+    {
+        return Math.Max(Math.Abs(vehicle.Size.Z), Math.Abs(vehicle.Size.X)) / 2f + VehicleLongitudinalSafetyBuffer;
     }
 
     private VehicleProjection ProjectVehicle(TrafficVehicle vehicle, Vector3 truckPosition)
