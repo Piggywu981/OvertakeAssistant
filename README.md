@@ -8,7 +8,7 @@ or Adaptive Cruise Control.
 
 - Registers a `Toggle Overtake Assistant` control.
 - Listens to game telemetry and traffic data.
-- When enabled, looks for a slower vehicle 5-40 meters ahead in the current
+- When enabled, looks for a slower vehicle 10-85 meters ahead in the current
   lane.
 - If the truck is at least 5 km/h faster and the adjacent left lane appears
   clear, sends a short `lblinker` pulse through `GameOutput`.

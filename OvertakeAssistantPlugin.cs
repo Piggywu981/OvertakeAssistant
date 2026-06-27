@@ -23,8 +23,8 @@ public sealed class OvertakeAssistantPlugin : Plugin, IPluginUi
     private const string ArCallbackName = "OvertakeAssistant.AR";
 
     private const float MinimumSpeed = 55f / 3.6f;
-    private const float SlowVehicleLookahead = 40f;
-    private const float SlowVehicleMinimumGap = 5f;
+    private const float SlowVehicleLookahead = 85f;
+    private const float SlowVehicleMinimumGap = 10f;
     private const float MinimumClosingSpeed = 5f / 3.6f;
     private const float AdjacentLaneWidth = 4.5f;
     private const float AdjacentLaneTolerance = 2.4f;
