@@ -1,0 +1,11 @@
+bin/
+obj/
+.vs/
+.idea/
+*.user
+*.suo
+*.cache
+*.deps.json
+*.sourcelink.json
+project.assets.json
+project.nuget.cache
