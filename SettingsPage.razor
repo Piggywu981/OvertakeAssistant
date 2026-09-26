@@ -1,0 +1,93 @@
+@page "/plugins/adjustments/local.overtakeassistant"
+@using ETS2LA.UI.Shared.Components
+@implements IDisposable
+
+<div class="flex flex-col w-108 m-5 ml-8 gap-6">
+    <Separator Label="Overtake Assistant" />
+    <p class="description">Automatic overtake requests with optional overlay and AR diagnostics.</p>
+
+    @if (Plugin is null)
+    {
+        <p class="description">Plugin is not loaded.</p>
+    }
+    else
+    {
+        <Switch Title="Show overlay window"
+                Description="Shows the live overtake state in the ETS2LA overlay."
+                Value="@Plugin.ShowOverlay"
+                ValueChanged="@((bool value) => Plugin.ShowOverlay = value)" />
+        <Switch Title="Show AR markers"
+                Description="Draws the detected overtake target and lane-change hints in AR."
+                Value="@Plugin.ShowAr"
+                ValueChanged="@((bool value) => Plugin.ShowAr = value)" />
+
+        <Separator Label="Current state" Class="mt-4" />
+        <div class="flex flex-col rounded-sm bg-control-bg-dark border border-bg-darker p-4 gap-2">
+            @foreach (var row in StatusRows)
+            {
+                <div class="flex justify-between gap-4">
+                    <p class="text-description">@row.Key</p>
+                    <p>@row.Value</p>
+                </div>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private OvertakeAssistantPlugin? Plugin => OvertakeAssistantPlugin.Instance;
+
+    private PeriodicTimer? _timer;
+    private CancellationTokenSource? _cts;
+
+    protected override void OnInitialized()
+    {
+        base.OnInitialized();
+        _cts = new CancellationTokenSource();
+        _ = RefreshLoop(_cts.Token);
+    }
+
+    private async Task RefreshLoop(CancellationToken token)
+    {
+        _timer = new PeriodicTimer(TimeSpan.FromMilliseconds(500));
+        try
+        {
+            while (await _timer.WaitForNextTickAsync(token))
+            {
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private Dictionary<string, string> StatusRows
+    {
+        get
+        {
+            var snapshot = Plugin?.CurrentSnapshot;
+            if (snapshot == null)
+            {
+                return new Dictionary<string, string>();
+            }
+
+            return new Dictionary<string, string>
+            {
+                { "Enabled", snapshot.Armed ? "Yes" : "No" },
+                { "Phase", snapshot.Phase },
+                { "Status", snapshot.Status },
+                { "Target", snapshot.TargetText },
+                { "Left lane", snapshot.LeftLaneClear ? "Clear" : "Blocked" },
+                { "Right lane", snapshot.RightLaneClear ? "Clear" : "Blocked" },
+            };
+        }
+    }
+
+    public void Dispose()
+    {
+        _cts?.Cancel();
+        _timer?.Dispose();
+        _cts?.Dispose();
+    }
+}

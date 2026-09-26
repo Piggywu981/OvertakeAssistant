@@ -14,8 +14,15 @@ using Hexa.NET.ImGui;
 
 namespace OvertakeAssistant;
 
-public sealed class OvertakeAssistantPlugin : Plugin, IPluginUi
+public sealed class OvertakeAssistantPlugin : Plugin
 {
+    public static OvertakeAssistantPlugin? Instance { get; private set; }
+
+    public OvertakeAssistantPlugin()
+    {
+        Instance = this;
+    }
+
     private const string PluginId = "local.overtakeassistant";
     private const string ControlChannelId = "OvertakeAssistant.Indicators";
     private const string ToggleControlId = "OvertakeAssistant.Toggle";
@@ -68,13 +75,50 @@ public sealed class OvertakeAssistantPlugin : Plugin, IPluginUi
     private WindowDefinition _overlayWindowDefinition;
     private OverlaySnapshot _overlaySnapshot = OverlaySnapshot.Empty;
 
+    public bool ShowOverlay
+    {
+        get => _showOverlay;
+        set
+        {
+            _showOverlay = value;
+            if (_overlayWindowRegistered)
+            {
+                if (_showOverlay)
+                {
+                    OverlayHandler.Current.OpenWindow(OverlayWindowTitle);
+                }
+                else
+                {
+                    OverlayHandler.Current.CloseWindow(OverlayWindowTitle);
+                }
+            }
+        }
+    }
+
+    public bool ShowAr
+    {
+        get => _showAr;
+        set
+        {
+            _showAr = value;
+            if (_showAr)
+            {
+                TryRegisterArCallback();
+            }
+            else
+            {
+                UnregisterArCallback();
+            }
+        }
+    }
+
     public override PluginInformation Info => new()
     {
         Id = PluginId,
         Name = "Overtake Assistant",
         Description = "Experimental third-party overtaking assistant that reuses the existing indicator lane-change flow.",
-        Version = "0.1.0",
-        SupportedETS2LA = ">=3.3.6",
+        Version = "0.2.0",
+        SupportedETS2LA = "*",
         AuthorName = "Local",
         Dependencies =
         [
@@ -226,70 +270,7 @@ public sealed class OvertakeAssistantPlugin : Plugin, IPluginUi
             4f);
     }
 
-    public IEnumerable<PluginPage> RenderPages()
-    {
-        OverlaySnapshot snapshot = _overlaySnapshot;
-        yield return new PluginPage(
-            "overtake-assistant",
-            PluginPageLocation.Settings,
-            "Overtake Assistant",
-            "Automatic overtake requests with optional overlay and AR diagnostics.",
-            new UiElement[]
-            {
-                new UiSwitch(
-                    "Show overlay window",
-                    "Shows the live overtake state in the ETS2LA overlay.",
-                    _showOverlay,
-                    "showOverlay"),
-                new UiSwitch(
-                    "Show AR markers",
-                    "Draws the detected overtake target and lane-change hints in AR.",
-                    _showAr,
-                    "showAr"),
-                new UiTable(
-                    "Current state",
-                    new[] { "Value", "Current" },
-                    new[]
-                    {
-                        new[] { "Enabled", snapshot.Armed ? "Yes" : "No" },
-                        new[] { "Phase", snapshot.Phase },
-                        new[] { "Status", snapshot.Status },
-                        new[] { "Target", snapshot.TargetText },
-                        new[] { "Left lane", snapshot.LeftLaneClear ? "Clear" : "Blocked" },
-                        new[] { "Right lane", snapshot.RightLaneClear ? "Clear" : "Blocked" }
-                    })
-            });
-    }
-
-    public void OnAction(string actionId, object? value)
-    {
-        switch (actionId)
-        {
-            case "showOverlay":
-                _showOverlay = value is bool showOverlay && showOverlay;
-                if (_showOverlay)
-                {
-                    RegisterOverlayWindow();
-                    OverlayHandler.Current.OpenWindow(OverlayWindowTitle);
-                }
-                else
-                {
-                    OverlayHandler.Current.CloseWindow(OverlayWindowTitle);
-                }
-                break;
-            case "showAr":
-                _showAr = value is bool showAr && showAr;
-                if (_showAr)
-                {
-                    TryRegisterArCallback();
-                }
-                else
-                {
-                    UnregisterArCallback();
-                }
-                break;
-        }
-    }
+    public OverlaySnapshot CurrentSnapshot => _overlaySnapshot;
 
     private void UpdateEstimatedForward(Vector3 truckPosition)
     {
@@ -544,15 +525,15 @@ public sealed class OvertakeAssistantPlugin : Plugin, IPluginUi
             return false;
         }
 
-        if (state.PauseSteeringAssist || state.PauseLongitudinalAssist)
+        if (!state.EnableAssists)
         {
-            reason = "assists paused";
+            reason = "assists disabled";
             return false;
         }
 
-        if (state.DesiredSteeringLevel == SteeringAssists.None || state.DesiredLongitudinalLevel == LongitudinalAssists.None)
+        if (state.DrivingMode != DrivingMode.FullSelfDriving)
         {
-            reason = "required assists disabled";
+            reason = "full self-driving mode required";
             return false;
         }
 
@@ -961,7 +942,7 @@ public sealed class OvertakeAssistantPlugin : Plugin, IPluginUi
         Right
     }
 
-    private sealed record OverlaySnapshot(
+    public sealed record OverlaySnapshot(
         bool Armed,
         string Phase,
         string Status,
@@ -984,7 +965,7 @@ public sealed class OvertakeAssistantPlugin : Plugin, IPluginUi
             null);
     }
 
-    private sealed record VehicleArInfo(short Id, Vector3 Position, float Width, float Height, float Length);
+    public sealed record VehicleArInfo(short Id, Vector3 Position, float Width, float Height, float Length);
 
     private sealed record VehicleProjection(TrafficVehicle Vehicle, float Longitudinal, float Lateral, float Speed);
 }

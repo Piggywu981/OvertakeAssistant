@@ -1,51 +1,60 @@
-<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk.Razor">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <OutputType>library</OutputType>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <RootNamespace>OvertakeAssistant</RootNamespace>
   </PropertyGroup>
 
   <ItemGroup>
     <Reference Include="ETS2LA.Shared">
-      <HintPath>..\..\Release-ETS2LA-win-beta-Portable\current\ETS2LA.Shared.dll</HintPath>
+      <HintPath>..\..\ETS2LA-win-release-Portable\current\ETS2LA.Shared.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="ETS2LA.Backend">
-      <HintPath>..\..\Release-ETS2LA-win-beta-Portable\current\ETS2LA.Backend.dll</HintPath>
+      <HintPath>..\..\ETS2LA-win-release-Portable\current\ETS2LA.Backend.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="ETS2LA.Controls">
-      <HintPath>..\..\Release-ETS2LA-win-beta-Portable\current\ETS2LA.Controls.dll</HintPath>
+      <HintPath>..\..\ETS2LA-win-release-Portable\current\ETS2LA.Controls.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="ETS2LA.Game">
-      <HintPath>..\..\Release-ETS2LA-win-beta-Portable\current\ETS2LA.Game.dll</HintPath>
+      <HintPath>..\..\ETS2LA-win-release-Portable\current\ETS2LA.Game.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="ETS2LA.Logging">
-      <HintPath>..\..\Release-ETS2LA-win-beta-Portable\current\ETS2LA.Logging.dll</HintPath>
+      <HintPath>..\..\ETS2LA-win-release-Portable\current\ETS2LA.Logging.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="ETS2LA.Notifications">
-      <HintPath>..\..\Release-ETS2LA-win-beta-Portable\current\ETS2LA.Notifications.dll</HintPath>
+      <HintPath>..\..\ETS2LA-win-release-Portable\current\ETS2LA.Notifications.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="ETS2LA.Overlay">
-      <HintPath>..\..\Release-ETS2LA-win-beta-Portable\current\ETS2LA.Overlay.dll</HintPath>
+      <HintPath>..\..\ETS2LA-win-release-Portable\current\ETS2LA.Overlay.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="ETS2LA.State">
-      <HintPath>..\..\Release-ETS2LA-win-beta-Portable\current\ETS2LA.State.dll</HintPath>
+      <HintPath>..\..\ETS2LA-win-release-Portable\current\ETS2LA.State.dll</HintPath>
       <Private>false</Private>
     </Reference>
-    <Reference Include="Avalonia.Base">
-      <HintPath>..\..\Release-ETS2LA-win-beta-Portable\current\Avalonia.Base.dll</HintPath>
+    <Reference Include="ETS2LA.UI">
+      <HintPath>..\..\ETS2LA-win-release-Portable\current\ETS2LA.UI.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="Hexa.NET.ImGui">
-      <HintPath>..\..\Release-ETS2LA-win-beta-Portable\current\Hexa.NET.ImGui.dll</HintPath>
+      <HintPath>..\..\ETS2LA-win-release-Portable\current\Hexa.NET.ImGui.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Microsoft.AspNetCore.Components">
+      <HintPath>..\..\ETS2LA-win-release-Portable\current\Microsoft.AspNetCore.Components.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Microsoft.AspNetCore.Components.Web">
+      <HintPath>..\..\ETS2LA-win-release-Portable\current\Microsoft.AspNetCore.Components.Web.dll</HintPath>
       <Private>false</Private>
     </Reference>
   </ItemGroup>
