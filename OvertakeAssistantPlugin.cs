@@ -42,8 +42,17 @@ public sealed class OvertakeAssistantPlugin : Plugin
     private const float PassedVehicleBehindDistance = 26f;
     private const float VehicleLongitudinalSafetyBuffer = 2.0f;
     private const float IndicatorPulseSeconds = 0.35f;
-    private const float LaneChangeSettleSeconds = 7.0f;
     private const float CooldownSeconds = 10f;
+    private const float MaxHeightDifference = 3f;
+    private const float MinimumCurveRadius = 800f;
+    private const float OvertakingMinimumSpeed = 45f / 3.6f;
+    private const float RelativeSpeedHorizonSeconds = 4f;
+    private const float AdjacentLaneExtendedScanRear = 60f;
+    private const float AdjacentLaneFrontScanMargin = 10f;
+    private const float LaneChangeConfirmedDistance = 3f;
+    private const float LaneChangeSettleHoldSeconds = 1.5f;
+    private const float LaneChangeVerificationTimeoutSeconds = 8f;
+    private const float PassingTimeoutSeconds = 30f;
     private const float ManualInputBrakeThreshold = 0.08f;
     private const float ManualInputSteerThreshold = 0.18f;
     private const uint ArCandidateColor = 0x66CCFFFF;
@@ -61,12 +70,18 @@ public sealed class OvertakeAssistantPlugin : Plugin
     private TrafficData? _traffic;
     private Vector3? _previousTruckPosition;
     private Vector3 _estimatedForward = Vector3.UnitZ;
+    private float _curvature;
+    private float? _previousHeading;
+    private DateTime _previousHeadingAt = DateTime.UtcNow;
     private OvertakePhase _phase = OvertakePhase.Idle;
     private DateTime _phaseStartedAt = DateTime.UtcNow;
     private DateTime _cooldownUntil = DateTime.MinValue;
     private DateTime _indicatorUntil = DateTime.MinValue;
     private IndicatorDirection _activeIndicator = IndicatorDirection.None;
     private short? _targetVehicleId;
+    private Vector3? _phaseStartPosition;
+    private Vector3 _phaseStartForward = Vector3.UnitZ;
+    private DateTime? _laneChangeConfirmedAt;
     private bool _armed;
     private bool _showOverlay = true;
     private bool _showAr = true;
@@ -117,15 +132,14 @@ public sealed class OvertakeAssistantPlugin : Plugin
         Id = PluginId,
         Name = "Overtake Assistant",
         Description = "Experimental third-party overtaking assistant that reuses the existing indicator lane-change flow.",
-        Version = "0.2.0",
+        Version = "0.3.0",
         SupportedETS2LA = "*",
         AuthorName = "Local",
         Dependencies =
         [
             "tumppi066.pathlib",
             "tumppi066.pathfinding",
-            "tumppi066.laneassist",
-            "tumppi066.adaptivecruisecontrol"
+            "tumppi066.laneassist"
         ],
         Tags = ["Driving", "Experimental"]
     };
@@ -192,19 +206,19 @@ public sealed class OvertakeAssistantPlugin : Plugin
                 TryStartOvertake();
                 break;
             case OvertakePhase.RequestingLeft:
-                if (SecondsInPhase > LaneChangeSettleSeconds)
-                {
-                    TransitionTo(OvertakePhase.Passing);
-                }
+                HandleLaneChangePhase(movingLeft: true);
                 break;
             case OvertakePhase.Passing:
+                if (SecondsInPhase > PassingTimeoutSeconds)
+                {
+                    Abort("passing timed out");
+                    break;
+                }
+
                 TryReturnToOriginalLane();
                 break;
             case OvertakePhase.RequestingRight:
-                if (SecondsInPhase > LaneChangeSettleSeconds)
-                {
-                    CompleteOvertake();
-                }
+                HandleLaneChangePhase(movingLeft: false);
                 break;
             case OvertakePhase.Cooldown:
                 if (DateTime.UtcNow >= _cooldownUntil)
@@ -244,6 +258,7 @@ public sealed class OvertakeAssistantPlugin : Plugin
     {
         _telemetry = data;
         UpdateEstimatedForward(data.truckPlacement.coordinate.ToVector3());
+        UpdateCurvature(data);
     }
 
     private void OnTraffic(TrafficData data)
@@ -285,6 +300,45 @@ public sealed class OvertakeAssistantPlugin : Plugin
         }
 
         _previousTruckPosition = truckPosition;
+    }
+
+    private void UpdateCurvature(GameTelemetryData data)
+    {
+        float heading = (float)data.truckPlacement.rotation.X;
+        float speed = data.truckFloat.speed;
+        DateTime now = DateTime.UtcNow;
+
+        if (_previousHeading is { } previousHeading && speed > 1f)
+        {
+            float deltaTime = (float)(now - _previousHeadingAt).TotalSeconds;
+            if (deltaTime > 0.01f && deltaTime < 1f)
+            {
+                // |dθ/dt| / v = 1/R. Only the absolute turn rate matters, so this works
+                // regardless of the game's handedness or heading sign convention.
+                float turnRate = MathF.Abs(WrapAngle(heading - previousHeading)) / deltaTime;
+                float curvature = turnRate / speed;
+                _curvature = _curvature * 0.8f + curvature * 0.2f;
+            }
+        }
+
+        _previousHeading = heading;
+        _previousHeadingAt = now;
+    }
+
+    private static float WrapAngle(float angle)
+    {
+        const float TwoPi = MathF.PI * 2f;
+        angle %= TwoPi;
+        if (angle > MathF.PI)
+        {
+            angle -= TwoPi;
+        }
+        else if (angle < -MathF.PI)
+        {
+            angle += TwoPi;
+        }
+
+        return angle;
     }
 
     private void RegisterOverlayWindow()
@@ -485,17 +539,18 @@ public sealed class OvertakeAssistantPlugin : Plugin
     private void DrawLaneClearanceZone(ARRenderer ar, Vector3 truckPosition, float lateral, float frontClearance, float rearClearance, uint color)
     {
         Vector3 forward = Vector3.Normalize(_estimatedForward);
-        Vector3 right = Vector3.Normalize(Vector3.Cross(Vector3.UnitY, forward));
-        Vector3 laneCenter = truckPosition + right * lateral + Vector3.UnitY * 0.12f;
+        // Left-handed game world (+X = west): this cross product points to the truck's LEFT.
+        Vector3 left = Vector3.Normalize(Vector3.Cross(Vector3.UnitY, forward));
+        Vector3 laneCenter = truckPosition + left * lateral + Vector3.UnitY * 0.12f;
         float halfWidth = AdjacentLaneTolerance;
 
         Vector3 frontCenter = laneCenter + forward * frontClearance;
         Vector3 rearCenter = laneCenter - forward * rearClearance;
 
-        ARCoordinate frontLeft = frontCenter - right * halfWidth;
-        ARCoordinate frontRight = frontCenter + right * halfWidth;
-        ARCoordinate rearRight = rearCenter + right * halfWidth;
-        ARCoordinate rearLeft = rearCenter - right * halfWidth;
+        ARCoordinate frontLeft = frontCenter - left * halfWidth;
+        ARCoordinate frontRight = frontCenter + left * halfWidth;
+        ARCoordinate rearRight = rearCenter + left * halfWidth;
+        ARCoordinate rearLeft = rearCenter - left * halfWidth;
 
         ar.Draw3DQuad(frontLeft, frontRight, rearRight, rearLeft, color, thickness: 2.0f);
         ar.Draw3DLine(new ARCoordinate(laneCenter - forward * rearClearance), new ARCoordinate(laneCenter + forward * frontClearance), color, 2.0f);
@@ -504,8 +559,9 @@ public sealed class OvertakeAssistantPlugin : Plugin
     private void DrawLaneClearanceLabel(ARRenderer ar, Vector3 truckPosition, float lateral, float frontClearance, float rearClearance, uint color, string label)
     {
         Vector3 forward = Vector3.Normalize(_estimatedForward);
-        Vector3 right = Vector3.Normalize(Vector3.Cross(Vector3.UnitY, forward));
-        Vector3 labelPosition = truckPosition + right * lateral + forward * Math.Min(frontClearance, 25f) + Vector3.UnitY * 2.2f;
+        // Left-handed game world (+X = west): this cross product points to the truck's LEFT.
+        Vector3 left = Vector3.Normalize(Vector3.Cross(Vector3.UnitY, forward));
+        Vector3 labelPosition = truckPosition + left * lateral + forward * Math.Min(frontClearance, 25f) + Vector3.UnitY * 2.2f;
         ar.Draw3DText(new ARCoordinate(labelPosition), $"{label} +{frontClearance:0}m / -{rearClearance:0}m", color);
     }
 
@@ -537,7 +593,10 @@ public sealed class OvertakeAssistantPlugin : Plugin
             return false;
         }
 
-        if (_telemetry.truckFloat.speed < MinimumSpeed)
+        // Starting an overtake needs cruise speed; an active one only needs enough speed to
+        // finish, so rolling grades do not abort the maneuver mid-way.
+        float minimumSpeed = _phase == OvertakePhase.Idle ? MinimumSpeed : OvertakingMinimumSpeed;
+        if (_telemetry.truckFloat.speed < minimumSpeed)
         {
             reason = "below minimum speed";
             return false;
@@ -651,6 +710,12 @@ public sealed class OvertakeAssistantPlugin : Plugin
             return;
         }
 
+        if (_curvature >= 1f / MinimumCurveRadius)
+        {
+            // Lane classification from world positions is unreliable on curves; wait for a straight.
+            return;
+        }
+
         if (_telemetry == null || _traffic == null)
         {
             return;
@@ -711,6 +776,7 @@ public sealed class OvertakeAssistantPlugin : Plugin
 
         return _traffic.vehicles
             .Where(IsUsableVehicle)
+            .Where(vehicle => Math.Abs(vehicle.Position.Y - truckPosition.Y) <= MaxHeightDifference)
             .Select(vehicle => ProjectVehicle(vehicle, truckPosition))
             .Where(vehicle => Math.Abs(vehicle.Lateral) < AdjacentLaneTolerance)
             .Where(vehicle => vehicle.Longitudinal >= SlowVehicleMinimumGap && vehicle.Longitudinal <= SlowVehicleLookahead)
@@ -731,28 +797,45 @@ public sealed class OvertakeAssistantPlugin : Plugin
 
     private bool IsAdjacentLaneClear(Vector3 truckPosition, LaneSide side, float frontClearance, float rearClearance)
     {
-        if (_traffic == null)
+        if (_traffic == null || _telemetry == null)
         {
             return false;
         }
 
+        float truckSpeed = _telemetry.truckFloat.speed;
         foreach (TrafficVehicle vehicle in _traffic.vehicles.Where(IsUsableVehicle))
         {
+            // Bridges and parallel ramps sit above or below the carriageway; the flattened
+            // projection would otherwise classify their traffic as adjacent-lane vehicles.
+            if (Math.Abs(vehicle.Position.Y - truckPosition.Y) > MaxHeightDifference)
+            {
+                continue;
+            }
+
             VehicleProjection projection = ProjectVehicle(vehicle, truckPosition);
             if (!IsInAnyScannedAdjacentLane(projection.Lateral, side))
             {
                 continue;
             }
 
-            float longitudinalBuffer = GetLongitudinalVehicleBuffer(vehicle);
-            if (projection.Longitudinal >= -longitudinalBuffer &&
-                projection.Longitudinal < frontClearance + longitudinalBuffer)
+            if (projection.Longitudinal < -AdjacentLaneExtendedScanRear ||
+                projection.Longitudinal > frontClearance + AdjacentLaneFrontScanMargin)
             {
-                return false;
+                continue;
             }
 
-            if (projection.Longitudinal < 0f &&
-                Math.Abs(projection.Longitudinal) < rearClearance + longitudinalBuffer)
+            float longitudinalBuffer = GetLongitudinalVehicleBuffer(vehicle);
+            float rearBlockBoundary = -(rearClearance + longitudinalBuffer);
+            float frontBlockBoundary = frontClearance + longitudinalBuffer;
+
+            // Static positions miss fast approachers: extrapolate the projection over the
+            // prediction horizon and treat any overlap with the blocked range as unsafe.
+            // The interval always contains the current position, so this also covers the
+            // plain static case.
+            float predictedEnd = projection.Longitudinal + (vehicle.speed - truckSpeed) * RelativeSpeedHorizonSeconds;
+
+            if (Math.Min(projection.Longitudinal, predictedEnd) < frontBlockBoundary &&
+                Math.Max(projection.Longitudinal, predictedEnd) > rearBlockBoundary)
             {
                 return false;
             }
@@ -766,6 +849,8 @@ public sealed class OvertakeAssistantPlugin : Plugin
         return [GetPrimaryLaneLateral(side)];
     }
 
+    // The game world is left-handed (+X = west), so Cross(UnitY, forward) yields the truck's
+    // LEFT vector and positive lateral offsets are to the left. Hence Left => +AdjacentLaneWidth.
     private static float GetPrimaryLaneLateral(LaneSide side)
     {
         return side == LaneSide.Left ? AdjacentLaneWidth : -AdjacentLaneWidth;
@@ -792,14 +877,16 @@ public sealed class OvertakeAssistantPlugin : Plugin
     private VehicleProjection ProjectVehicle(TrafficVehicle vehicle, Vector3 truckPosition)
     {
         Vector3 forward = Vector3.Normalize(_estimatedForward);
-        Vector3 right = Vector3.Normalize(Vector3.Cross(Vector3.UnitY, forward));
+        // Left-handed game world (+X = west): this cross product points to the truck's LEFT,
+        // so positive Lateral means the vehicle is on the truck's left side.
+        Vector3 left = Vector3.Normalize(Vector3.Cross(Vector3.UnitY, forward));
         Vector3 delta = vehicle.Position - truckPosition;
         delta.Y = 0f;
 
         return new VehicleProjection(
             vehicle,
             Vector3.Dot(delta, forward),
-            Vector3.Dot(delta, right),
+            Vector3.Dot(delta, left),
             vehicle.speed);
     }
 
@@ -877,15 +964,23 @@ public sealed class OvertakeAssistantPlugin : Plugin
         Notify("Overtake complete", "Returning to cooldown.", NotificationLevel.Success, 4f);
     }
 
-    private void Abort(string reason)
+    private void Abort(string reason, bool stopIndicator = true)
     {
         if (_phase == OvertakePhase.Idle && _targetVehicleId == null)
         {
-            StopIndicatorPulse();
+            if (stopIndicator)
+            {
+                StopIndicatorPulse();
+            }
+
             return;
         }
 
-        StopIndicatorPulse();
+        if (stopIndicator)
+        {
+            StopIndicatorPulse();
+        }
+
         _targetVehicleId = null;
         _cooldownUntil = DateTime.UtcNow.AddSeconds(CooldownSeconds);
         TransitionTo(OvertakePhase.Cooldown);
@@ -906,6 +1001,62 @@ public sealed class OvertakeAssistantPlugin : Plugin
     {
         _phase = phase;
         _phaseStartedAt = DateTime.UtcNow;
+        _phaseStartPosition = _telemetry?.truckPlacement.coordinate.ToVector3();
+        _phaseStartForward = _estimatedForward;
+        _laneChangeConfirmedAt = null;
+    }
+
+    private float LateralDisplacementSincePhaseStart()
+    {
+        if (_phaseStartPosition is not { } startPosition || _telemetry == null)
+        {
+            return 0f;
+        }
+
+        Vector3 forward = Vector3.Normalize(_phaseStartForward);
+        // The game world is left-handed (+X = west): Cross(UnitY, forward) points to the
+        // truck's LEFT, so a positive result means the truck moved left.
+        Vector3 left = Vector3.Normalize(Vector3.Cross(Vector3.UnitY, forward));
+        Vector3 delta = _telemetry.truckPlacement.coordinate.ToVector3() - startPosition;
+        delta.Y = 0f;
+        return Vector3.Dot(delta, left);
+    }
+
+    private void HandleLaneChangePhase(bool movingLeft)
+    {
+        float displacement = LateralDisplacementSincePhaseStart();
+        float signedDisplacement = movingLeft ? displacement : -displacement;
+
+        if (signedDisplacement >= LaneChangeConfirmedDistance)
+        {
+            _laneChangeConfirmedAt ??= DateTime.UtcNow;
+            if ((DateTime.UtcNow - _laneChangeConfirmedAt.Value).TotalSeconds >= LaneChangeSettleHoldSeconds)
+            {
+                if (movingLeft)
+                {
+                    TransitionTo(OvertakePhase.Passing);
+                }
+                else
+                {
+                    CompleteOvertake();
+                }
+            }
+
+            return;
+        }
+
+        if (SecondsInPhase <= LaneChangeVerificationTimeoutSeconds)
+        {
+            return;
+        }
+
+        // Verified the lane change never happened, so the game indicator we pulsed is still on.
+        // The game indicator is a toggle: a second press cancels it. Never do this after a
+        // confirmed lane change (the game auto-cancels the indicator there, and the extra press
+        // would switch it back on). Road curvature displacement (sagitta) can rarely mask a
+        // failed change on curves; the Passing timeout backstops those cases.
+        PulseIndicator(movingLeft ? IndicatorDirection.Left : IndicatorDirection.Right);
+        Abort(movingLeft ? "lane change was not performed" : "return to original lane was not performed", stopIndicator: false);
     }
 
     private static void Notify(string title, string content, NotificationLevel level, float closeAfter)

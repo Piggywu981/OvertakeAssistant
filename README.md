@@ -12,6 +12,15 @@ or Adaptive Cruise Control.
   lane.
 - If the truck is at least 5 km/h faster and the adjacent left lane appears
   clear, sends a short `lblinker` pulse through `GameOutput`.
+- Only starts overtakes when the measured curve radius is above 800 meters;
+  lane classification from world positions is not trustworthy on curves.
+- Ignores traffic more than 3 meters above or below the truck, so bridge and
+  ramp traffic is not mistaken for adjacent-lane vehicles.
+- Extrapolates adjacent-lane traffic 4 seconds ahead, so faster vehicles
+  approaching from behind block the requested lane before the truck pulls out.
+- Verifies a requested lane change actually happened by tracking the truck's
+  lateral displacement. An unconfirmed change aborts within 8 seconds and
+  pulses the indicator again to cancel it; passing is capped at 30 seconds.
 - After passing the original target vehicle, sends a short `rblinker` pulse to
   request returning once the right lane is clear 70 meters ahead and 35 meters
   behind.
@@ -62,6 +71,7 @@ closed-course prototype:
 
 - It only requests one lane change via indicators.
 - It cancels on paused assists, paused game, low speed, or manual brake/steer
-  input during an overtake.
+  input during an overtake. Starting an overtake requires 55 km/h; an active
+  one only aborts below 45 km/h so rolling grades do not interrupt it.
 - It uses traffic positions and estimated truck heading only; it does not yet
   inspect road topology, lane legality, upcoming ramps, junctions, or road signs.
