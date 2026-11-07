@@ -1,0 +1,6 @@
+bin/
+obj/
+.trae/
+.vs/
+.mimosa/
+*.user

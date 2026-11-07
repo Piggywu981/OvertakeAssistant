@@ -1,0 +1,160 @@
+@page "/plugins/adjustments/local.overtakeassistant"
+@using ETS2LA.UI.Shared.Components
+@implements IDisposable
+
+<div class="flex flex-col w-108 m-5 ml-8 gap-6">
+    <Separator Label="Overtake Assistant (MOBIL)" />
+    <p class="description">Automatic overtaking with an IDM/MOBIL decision core. Lane changes are requested through PathLib and verified physically before being trusted.</p>
+
+    @if (Plugin is null)
+    {
+        <p class="description">Plugin is not loaded.</p>
+    }
+    else
+    {
+        <Separator Label="Behaviour" />
+        <Switch Title="Overtake on the left"
+                Description="Pass slower traffic on the truck's physical left (right-hand traffic). Disable for left-hand traffic maps."
+                Value="@Settings.OvertakeOnLeft"
+                ValueChanged="@((bool value) => { Settings.OvertakeOnLeft = value; Settings.Save(); })" />
+        <Slider Title="Minimum speed (m/s)"
+                Description="Below this speed no new overtakes are started."
+                Min="8f" Max="30f" Step="0.5f"
+                Value="@Settings.MinimumSpeed"
+                ValueChanged="@((float value) => { Settings.MinimumSpeed = value; Settings.Save(); })" />
+        <Slider Title="Cooldown (s)"
+                Description="Wait time after a finished or aborted overtake before evaluating again."
+                Min="3f" Max="30f" Step="1f"
+                Value="@Settings.CooldownSeconds"
+                ValueChanged="@((float value) => { Settings.CooldownSeconds = value; Settings.Save(); })" />
+
+        <Separator Label="Decision gates" Class="mt-4" />
+        <Slider Title="Evaluation distance (m)"
+                Description="Only evaluate overtaking when the slow vehicle is closer than this."
+                Min="30f" Max="90f" Step="5f"
+                Value="@Settings.EvaluationGapGate"
+                ValueChanged="@((float value) => { Settings.EvaluationGapGate = value; Settings.Save(); })" />
+        <Slider Title="Rear time headway (s)"
+                Description="Minimum time gap to the follower in the target lane before cutting in."
+                Min="1.0f" Max="4f" Step="0.1f"
+                Value="@Settings.RearTimeHeadway"
+                ValueChanged="@((float value) => { Settings.RearTimeHeadway = value; Settings.Save(); })" />
+        <Slider Title="Front time headway (s)"
+                Description="Minimum time gap to the leader in the target lane before cutting in."
+                Min="1.5f" Max="5f" Step="0.1f"
+                Value="@Settings.FrontTimeHeadway"
+                ValueChanged="@((float value) => { Settings.FrontTimeHeadway = value; Settings.Save(); })" />
+        <Slider Title="Return clearance (s)"
+                Description="Seconds behind the passed vehicle before returning to the original lane."
+                Min="1f" Max="3f" Step="0.1f"
+                Value="@Settings.ReturnClearTime"
+                ValueChanged="@((float value) => { Settings.ReturnClearTime = value; Settings.Save(); })" />
+
+        <Separator Label="MOBIL model" Class="mt-4" />
+        <Slider Title="Politeness (p)"
+                Description="How much weight is given to braking imposed on other drivers. Higher = more courteous, fewer changes."
+                Min="0f" Max="1f" Step="0.05f"
+                Value="@Settings.Politeness"
+                ValueChanged="@((float value) => { Settings.Politeness = value; Settings.Save(); })" />
+        <Slider Title="Overtake bias (m/s²)"
+                Description="Incentive threshold for overtaking. Higher = more conservative."
+                Min="0.05f" Max="1f" Step="0.05f"
+                Value="@Settings.OvertakeBias"
+                ValueChanged="@((float value) => { Settings.OvertakeBias = value; Settings.Save(); })" />
+        <Slider Title="Return bias (m/s²)"
+                Description="Incentive threshold for returning. Negative values make returning easier (keep-right behaviour)."
+                Min="-0.5f" Max="0.2f" Step="0.05f"
+                Value="@Settings.ReturnBias"
+                ValueChanged="@((float value) => { Settings.ReturnBias = value; Settings.Save(); })" />
+        <Slider Title="Safe braking limit (m/s²)"
+                Description="Maximum deceleration the target lane follower may be forced into (safety criterion)."
+                Min="0.5f" Max="3f" Step="0.1f"
+                Value="@Settings.SafeBrakingLimit"
+                ValueChanged="@((float value) => { Settings.SafeBrakingLimit = value; Settings.Save(); })" />
+
+        <Separator Label="Diagnostics" Class="mt-4" />
+        <Switch Title="Show overlay window"
+                Description="Shows the live overtake state in the ETS2LA overlay."
+                Value="@Plugin.ShowOverlay"
+                ValueChanged="@((bool value) => Plugin.ShowOverlay = value)" />
+        <Switch Title="Show AR markers"
+                Description="Draws the overtaking target and lane scan zones in AR."
+                Value="@Plugin.ShowAr"
+                ValueChanged="@((bool value) => Plugin.ShowAr = value)" />
+        <Switch Title="Write metrics CSV"
+                Description="Logs one row per attempt to Documents/ETS2LA/OvertakeAssistant/metrics.csv (completion rate, gaps, comfort)."
+                Value="@Settings.LogMetrics"
+                ValueChanged="@((bool value) => { Settings.LogMetrics = value; Settings.Save(); })" />
+
+        <Separator Label="Current state" Class="mt-4" />
+        <div class="flex flex-col rounded-sm bg-control-bg-dark border border-bg-darker p-4 gap-2">
+            @foreach (var row in StatusRows)
+            {
+                <div class="flex justify-between gap-4">
+                    <p class="text-description">@row.Key</p>
+                    <p>@row.Value</p>
+                </div>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private OvertakeAssistantPlugin? Plugin => OvertakeAssistantPlugin.Instance;
+
+    private OvertakeSettings Settings => OvertakeSettings.Current;
+
+    private PeriodicTimer? _timer;
+    private CancellationTokenSource? _cts;
+
+    protected override void OnInitialized()
+    {
+        base.OnInitialized();
+        _cts = new CancellationTokenSource();
+        _ = RefreshLoop(_cts.Token);
+    }
+
+    private async Task RefreshLoop(CancellationToken token)
+    {
+        _timer = new PeriodicTimer(TimeSpan.FromMilliseconds(500));
+        try
+        {
+            while (await _timer.WaitForNextTickAsync(token))
+            {
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private Dictionary<string, string> StatusRows
+    {
+        get
+        {
+            var snapshot = Plugin?.CurrentSnapshot;
+            if (snapshot == null)
+            {
+                return new Dictionary<string, string>();
+            }
+
+            return new Dictionary<string, string>
+            {
+                { "Enabled", snapshot.Armed ? "Yes" : "No" },
+                { "Phase", snapshot.Phase },
+                { "Status", snapshot.Status },
+                { "Target", snapshot.TargetText },
+                { "Overtake lane", snapshot.OvertakeLaneClear ? "Clear" : "Blocked" },
+                { "Return lane", snapshot.ReturnLaneClear ? "Clear" : "Blocked" },
+            };
+        }
+    }
+
+    public void Dispose()
+    {
+        _cts?.Cancel();
+        _timer?.Dispose();
+        _cts?.Dispose();
+    }
+}
